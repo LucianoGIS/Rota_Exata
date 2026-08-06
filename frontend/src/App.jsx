@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { MapContainer, TileLayer, Polygon, Polyline, useMap } from 'react-leaflet';
-import { Upload, Map as MapIcon, Download, Loader2, FileText, File, FileCode, Code } from 'lucide-react';
+import { MapContainer, TileLayer, Polygon, Polyline, Marker, useMap } from 'react-leaflet';
+import { Upload, Map as MapIcon, Download, Loader2, FileText, File, FileCode, Code, Eye, Layers, ArrowRightCircle } from 'lucide-react';
 import axios from 'axios';
 import './index.css';
 
@@ -14,6 +14,25 @@ let DefaultIcon = L.icon({
 });
 L.Marker.prototype.options.icon = DefaultIcon;
 
+// Helper to create vertex number HTML marker
+const createNumberIcon = (num) => {
+  return L.divIcon({
+    className: 'vertex-number-marker',
+    html: `<div>${num}</div>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11]
+  });
+};
+
+// Helper to create blinking flow arrow HTML marker
+const createArrowIcon = (angle) => {
+  return L.divIcon({
+    className: 'flow-arrow-marker',
+    html: `<div style="transform: rotate(${angle}deg);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ff3333" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg></div>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9]
+  });
+};
 
 function MapUpdater({ polygon, route }) {
   const map = useMap();
@@ -33,9 +52,13 @@ function App() {
   const [isCalculating, setIsCalculating] = useState(false);
   
   const [routePath, setRoutePath] = useState([]);
-
   const [speedKmH, setSpeedKmH] = useState(10);
-  
+
+  // New features state
+  const [mapTileType, setMapTileType] = useState('osm'); // 'osm' or 'esri'
+  const [showNumbers, setShowNumbers] = useState(true);
+  const [showArrows, setShowArrows] = useState(true);
+
   // Calculations
   const totalDistanceMeters = tableData.reduce((acc, row) => acc + parseFloat(row.distancia_m), 0);
   const totalDistanceKm = (totalDistanceMeters / 1000).toFixed(2);
@@ -48,6 +71,49 @@ function App() {
     if (h > 0) return `${h}h ${m}m`;
     return `${m} min`;
   };
+
+  // Helper to compute route markers (vertices & arrows)
+  const getRouteMarkers = () => {
+    const vertices = [];
+    const arrows = [];
+    
+    if (!routePath || routePath.length === 0) return { vertices, arrows };
+
+    let lines = [];
+    if (Array.isArray(routePath[0]) && Array.isArray(routePath[0][0])) {
+      lines = routePath;
+    } else {
+      lines = [routePath];
+    }
+
+    let stepNum = 1;
+    lines.forEach((line) => {
+      line.forEach((pt, idx) => {
+        // Add vertex marker for key points
+        if (idx === 0 || idx === line.length - 1 || idx % 2 === 0) {
+          vertices.push({ lat: pt[0], lng: pt[1], num: stepNum++ });
+        }
+        
+        // Add arrow marker in segment middle
+        if (idx < line.length - 1) {
+          const pt1 = line[idx];
+          const pt2 = line[idx + 1];
+          const midLat = (pt1[0] + pt2[0]) / 2;
+          const midLng = (pt1[1] + pt2[1]) / 2;
+          
+          const dLat = pt2[0] - pt1[0];
+          const dLng = pt2[1] - pt1[1];
+          const angle = Math.atan2(dLng, dLat) * (180 / Math.PI);
+          
+          arrows.push({ lat: midLat, lng: midLng, angle });
+        }
+      });
+    });
+
+    return { vertices, arrows };
+  };
+
+  const { vertices, arrows } = getRouteMarkers();
 
   const API_URL = 'http://127.0.0.1:8000';
 
@@ -145,12 +211,59 @@ function App() {
         
         {/* Left side: Map */}
         <div className="map-section">
+          
+          {/* Map Toolbar / Controls */}
+          <div className="map-toolbar">
+            <div className="map-toolbar-group">
+              <button 
+                className={`map-layer-btn ${mapTileType === 'osm' ? 'active' : ''}`}
+                onClick={() => setMapTileType('osm')}
+              >
+                <Layers size={14} /> Mapa Padrão
+              </button>
+              <button 
+                className={`map-layer-btn ${mapTileType === 'esri' ? 'active' : ''}`}
+                onClick={() => setMapTileType('esri')}
+              >
+                <Layers size={14} /> Satélite ESRI
+              </button>
+            </div>
+
+            {routePath.length > 0 && (
+              <div className="map-toolbar-group">
+                <label className="map-toggle-label">
+                  <input 
+                    type="checkbox" 
+                    checked={showNumbers} 
+                    onChange={(e) => setShowNumbers(e.target.checked)} 
+                  />
+                  <span>🔢 Números dos Vértices</span>
+                </label>
+                <label className="map-toggle-label">
+                  <input 
+                    type="checkbox" 
+                    checked={showArrows} 
+                    onChange={(e) => setShowArrows(e.target.checked)} 
+                  />
+                  <span>➔ Setas de Sentido (Piscando)</span>
+                </label>
+              </div>
+            )}
+          </div>
+
           <div className="map-container">
             <MapContainer center={[-26.3045, -48.846]} zoom={15} style={{ height: '100%', width: '100%' }}>
-              <TileLayer
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                attribution='&copy; OpenStreetMap contributors'
-              />
+              {mapTileType === 'osm' ? (
+                <TileLayer
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                  attribution='&copy; OpenStreetMap contributors'
+                />
+              ) : (
+                <TileLayer
+                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                  attribution='&copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+                />
+              )}
               <MapUpdater polygon={polygonCoords} />
               
               {polygonCoords && (
@@ -160,6 +273,24 @@ function App() {
               {routePath.length > 0 && (
                 <Polyline positions={routePath} pathOptions={{ color: '#2b5a9e', weight: 4 }} />
               )}
+
+              {/* Vertex Number Markers */}
+              {showNumbers && vertices.map((v, idx) => (
+                <Marker 
+                  key={`v-${idx}`} 
+                  position={[v.lat, v.lng]} 
+                  icon={createNumberIcon(v.num)} 
+                />
+              ))}
+
+              {/* Blinking Flow Arrow Markers */}
+              {showArrows && arrows.map((a, idx) => (
+                <Marker 
+                  key={`a-${idx}`} 
+                  position={[a.lat, a.lng]} 
+                  icon={createArrowIcon(a.angle)} 
+                />
+              ))}
             </MapContainer>
           </div>
         </div>

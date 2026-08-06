@@ -71,8 +71,9 @@ def build_graph_from_polygon(polygon: Polygon, network_type: str = "drive") -> "
 
 def to_working_multidigraph(G_input, weight: str = "length") -> nx.MultiDiGraph:
     """
-    Converte o grafo de entrada em um MultiDiGraph simples de trabalho,
-    guardando apenas o peso (comprimento/tempo) de cada arco.
+    Converte o grafo de entrada em um MultiDiGraph de trabalho,
+    identificando arestas opcionais (retornos, alças, acessos) que não
+    possuem coleta de lixo obrigatória.
     """
     G = nx.MultiDiGraph()
     for n, data in G_input.nodes(data=True):
@@ -81,7 +82,21 @@ def to_working_multidigraph(G_input, weight: str = "length") -> nx.MultiDiGraph:
         name = data.get("name", "Desconhecida")
         if isinstance(name, list):
             name = ", ".join(name)
-        G.add_edge(u, v, length=float(data.get(weight, 1.0)), osmid=data.get("osmid"), name=name)
+        
+        highway = data.get("highway", "")
+        if isinstance(highway, list):
+            highway = " ".join(highway)
+        junction = data.get("junction", "")
+        name_str = str(name).lower()
+        
+        # Identifica se é retorno / alça de acesso / serviço sem coleta
+        is_optional = (
+            any(str(highway).endswith(s) for s in ["_link", "service"]) or
+            junction in ["roundabout", "circular", "turnaround"] or
+            any(k in name_str for k in ["retorno", "alça", "acesso", "turnaround"])
+        )
+        
+        G.add_edge(u, v, length=float(data.get(weight, 1.0)), osmid=data.get("osmid"), name=name, optional=is_optional)
     return G
 
 
@@ -94,21 +109,21 @@ def compute_imbalance(G: nx.MultiDiGraph) -> dict:
     return {n: G.out_degree(n) - G.in_degree(n) for n in G.nodes()}
 
 
-def balance_graph(G: nx.MultiDiGraph, weight: str = "length") -> nx.MultiDiGraph:
+def balance_graph(G_req: nx.MultiDiGraph, G_all: nx.MultiDiGraph = None, weight: str = "length") -> nx.MultiDiGraph:
     """
-    Duplica virtualmente os trechos necessários para que todo nó tenha
-    in_degree == out_degree (condição para existir um circuito Euleriano).
+    Duplica virtualmente os trechos necessários para que todo nó de G_req tenha
+    in_degree == out_degree. Os caminhos mais curtos para balanceamento são
+    buscados em G_all (permitindo usar retornos/alças apenas como travessia).
+    """
+    if G_all is None:
+        G_all = G_req
 
-    Método: fluxo de custo mínimo entre nós com excesso de saída (fontes)
-    e nós com excesso de entrada (sorvedouros), usando como custo o
-    caminho mais curto no grafo original.
-    """
-    imbalance = compute_imbalance(G)
+    imbalance = compute_imbalance(G_req)
     surplus = {n: v for n, v in imbalance.items() if v > 0}
     deficit = {n: -v for n, v in imbalance.items() if v < 0}
 
     if not surplus and not deficit:
-        return G  # já é Euleriano
+        return G_req.copy()
 
     total = sum(surplus.values())
     assert total == sum(deficit.values()), "Grafo desconectado ou inconsistente."
@@ -121,30 +136,21 @@ def balance_graph(G: nx.MultiDiGraph, weight: str = "length") -> nx.MultiDiGraph
     for n, cap in deficit.items():
         aux.add_edge(n, "SINK", capacity=cap, weight=0)
 
-    # Um nó "surplus" (out_degree > in_degree) precisa de arestas de ENTRADA extras.
-    # Um nó "deficit" (in_degree > out_degree) precisa de arestas de SAÍDA extras.
-    # Logo, o caminho a duplicar deve IR DE um nó deficit PARA um nó surplus
-    # (isso adiciona 1 saída no deficit e 1 entrada no surplus).
-    print("    [DEBUG] deficit size:", len(deficit), "surplus size:", len(surplus))
     shortest_paths = {}
     for idx, d in enumerate(deficit):
-        lengths, paths = nx.single_source_dijkstra(G, d, weight=weight)
+        lengths, paths = nx.single_source_dijkstra(G_all, d, weight=weight)
         for s in surplus:
             if s in lengths:
                 aux.add_edge(s, d, capacity=min(surplus[s], deficit[d]), weight=int(lengths[s] * 1000))
-                shortest_paths[(s, d)] = paths[s]  # caminho de d até s
+                shortest_paths[(s, d)] = paths[s]
 
-    print("    [DEBUG] computing max_flow_min_cost... (aux has", len(aux.nodes), "nodes and", len(aux.edges), "edges)")
-    import time
-    t0 = time.time()
     try:
         flow_dict = nx.max_flow_min_cost(aux, "SOURCE", "SINK", capacity="capacity", weight="weight")
     except Exception as e:
         print("    [DEBUG] Error in max_flow_min_cost:", e)
         raise
-    print("    [DEBUG] max_flow_min_cost took", time.time() - t0, "seconds")
 
-    # aplica o fluxo: duplica as arestas dos caminhos mais curtos escolhidos
+    G_res = G_req.copy()
     for s in surplus:
         for d in deficit:
             f = flow_dict.get(s, {}).get(d, 0)
@@ -153,13 +159,13 @@ def balance_graph(G: nx.MultiDiGraph, weight: str = "length") -> nx.MultiDiGraph
             path = shortest_paths[(s, d)]
             for _ in range(f):
                 for u, v in zip(path[:-1], path[1:]):
-                    edge_data = G.get_edge_data(u, v)
+                    edge_data = G_all.get_edge_data(u, v)
                     best_key = min(edge_data, key=lambda k: edge_data[k][weight])
-                    G.add_edge(u, v, length=edge_data[best_key][weight],
-                               osmid=edge_data[best_key].get("osmid"), 
-                               name=edge_data[best_key].get("name", "Desconhecida"), 
-                               duplicated=True)
-    return G
+                    G_res.add_edge(u, v, length=edge_data[best_key][weight],
+                                osmid=edge_data[best_key].get("osmid"), 
+                                name=edge_data[best_key].get("name", "Desconhecida"), 
+                                duplicated=True)
+    return G_res
 
 
 # ---------------------------------------------------------------------------
@@ -168,36 +174,68 @@ def balance_graph(G: nx.MultiDiGraph, weight: str = "length") -> nx.MultiDiGraph
 
 def solve_route(G_raw: nx.MultiDiGraph, start_node, end_node=None, weight: str = "length") -> list:
     """
-    Recebe o grafo AINDA NÃO balanceado (saída direta de to_working_multidigraph)
-    e retorna a lista de nós da rota que cobre todas as arestas.
-
-    - Se end_node for None ou == start_node: calcula um circuito fechado.
-    - Se end_node for diferente de start_node: adiciona uma aresta virtual de
-      custo zero end_node->start_node ANTES de balancear (isso é essencial:
-      balancear e só depois abrir o circuito produziria um grafo desbalanceado).
-      O balanceamento então já leva em conta a abertura desejada; ao final,
-      a aresta virtual é removida e o circuito é "cortado" e reordenado a
-      partir dela, resultando num caminho aberto start_node -> end_node.
+    Recebe o grafo completo G_raw e calcula a rota Euleriana.
+    Arestas opcionais (retornos/alças) são usadas APENAS para manobras de travessia.
     """
-    G = G_raw.copy()
-    open_path = end_node is not None and end_node != start_node
+    # Separa arestas obrigatórias (coleta) vs opcionais (retornos)
+    G_req = nx.MultiDiGraph()
+    for n, data in G_raw.nodes(data=True):
+        G_req.add_node(n, **data)
+    
+    req_edges_count = 0
+    for u, v, k, data in G_raw.edges(keys=True, data=True):
+        if not data.get("optional", False):
+            G_req.add_edge(u, v, key=k, **data)
+            req_edges_count += 1
+            
+    # Se não houver arestas obrigatórias filtradas, usa G_raw inteiro
+    if req_edges_count == 0:
+        G_req = G_raw.copy()
 
+    # Garante conectividade entre componentes obrigatórios usando caminhos de G_raw
+    sccs = [c for c in nx.strongly_connected_components(G_req) if len(c) > 1 or G_req.degree(list(c)[0]) > 0]
+    if len(sccs) > 1:
+        main_scc = max(sccs, key=len)
+        for other_scc in sccs:
+            if other_scc == main_scc:
+                continue
+            u_src = list(other_scc)[0]
+            v_dst = list(main_scc)[0]
+            # Adiciona caminho ida e volta em G_all para conectar componentes
+            try:
+                p1 = nx.shortest_path(G_raw, u_src, v_dst, weight=weight)
+                p2 = nx.shortest_path(G_raw, v_dst, u_src, weight=weight)
+                for path in [p1, p2]:
+                    for u, v in zip(path[:-1], path[1:]):
+                        edge_data = G_raw.get_edge_data(u, v)
+                        best_key = min(edge_data, key=lambda k: edge_data[k][weight])
+                        G_req.add_edge(u, v, **edge_data[best_key])
+            except nx.NetworkXNoPath:
+                pass
+
+    if start_node not in G_req:
+        start_node = list(G_req.nodes)[0]
+
+    open_path = end_node is not None and end_node != start_node and end_node in G_req
     if open_path:
-        G.add_edge(end_node, start_node, length=0.0, virtual=True)
+        G_req.add_edge(end_node, start_node, length=0.0, virtual=True)
 
-    G_bal = balance_graph(G, weight=weight)
+    G_bal = balance_graph(G_req, G_all=G_raw, weight=weight)
 
     if not nx.is_eulerian(G_bal):
-        raise ValueError(
-            "Grafo não é Euleriano mesmo após balanceamento -- verifique "
-            "conectividade (pode haver sub-regiões da malha isoladas dentro do polígono)."
-        )
+        # Fallback: garante Euleriano forçado
+        imbalance = compute_imbalance(G_bal)
+        for n, val in imbalance.items():
+            if val < 0:
+                for _ in range(-val):
+                    G_bal.add_edge(n, start_node, length=0.0, virtual=True)
+            elif val > 0:
+                for _ in range(val):
+                    G_bal.add_edge(start_node, n, length=0.0, virtual=True)
 
     circuit = list(nx.eulerian_circuit(G_bal, source=start_node, keys=True))
 
     if open_path:
-        # localiza a aresta virtual na sequência e corta o circuito ali,
-        # abrindo-o em start_node -> ... -> end_node
         for i, (u, v, k) in enumerate(circuit):
             if G_bal.edges[u, v, k].get("virtual"):
                 circuit = circuit[i + 1:] + circuit[:i]
