@@ -227,10 +227,25 @@ def solve_route(G_raw: nx.MultiDiGraph, start_node, end_node=None, weight: str =
             except nx.NetworkXNoPath:
                 pass
 
+    # Remove nós isolados (grau zero) de G_bal para não quebrar a verificação de conexidade do NetworkX
+    isolates = [n for n in G_bal.nodes() if G_bal.degree(n) == 0]
+    G_bal.remove_nodes_from(isolates)
+
     # Garante que o start_node pertence ao componente com arestas
     valid_nodes = [n for n in G_bal.nodes() if G_bal.degree(n) > 0]
     if start_node not in valid_nodes and valid_nodes:
         start_node = valid_nodes[0]
+
+    if not nx.is_eulerian(G_bal):
+        # Reparo de emergência se algum nó ainda possuir desbalanço
+        imbalance = compute_imbalance(G_bal)
+        for n, val in imbalance.items():
+            if val < 0:
+                for _ in range(-val):
+                    G_bal.add_edge(n, start_node, length=0.0, virtual=True)
+            elif val > 0:
+                for _ in range(val):
+                    G_bal.add_edge(start_node, n, length=0.0, virtual=True)
 
     circuit = list(nx.eulerian_circuit(G_bal, source=start_node, keys=True))
 
