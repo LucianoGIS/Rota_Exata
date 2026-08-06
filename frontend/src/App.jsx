@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { MapContainer, TileLayer, Polygon, Polyline, Marker, useMap } from 'react-leaflet';
-import { Upload, Map as MapIcon, Download, Loader2, FileText, File, FileCode, Code, Eye, Layers, ArrowRightCircle } from 'lucide-react';
+import { MapContainer, TileLayer, Polygon, Polyline, Marker, LayersControl, useMap } from 'react-leaflet';
+import { Upload, Map as MapIcon, Download, Loader2, FileText, File, FileCode, Code, Eye, Layers } from 'lucide-react';
 import axios from 'axios';
 import './index.css';
 
@@ -55,7 +55,6 @@ function App() {
   const [speedKmH, setSpeedKmH] = useState(10);
 
   // New features state
-  const [mapTileType, setMapTileType] = useState('osm'); // 'osm' or 'esri'
   const [showNumbers, setShowNumbers] = useState(true);
   const [showArrows, setShowArrows] = useState(true);
 
@@ -89,12 +88,10 @@ function App() {
     let stepNum = 1;
     lines.forEach((line) => {
       line.forEach((pt, idx) => {
-        // Add vertex marker for key points
         if (idx === 0 || idx === line.length - 1 || idx % 2 === 0) {
           vertices.push({ lat: pt[0], lng: pt[1], num: stepNum++ });
         }
         
-        // Add arrow marker in segment middle
         if (idx < line.length - 1) {
           const pt1 = line[idx];
           const pt2 = line[idx + 1];
@@ -129,7 +126,6 @@ function App() {
       const response = await axios.post(`${API_URL}/upload-kml`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      // Response points are [lon, lat], Leaflet expects [lat, lon]
       const latLngs = response.data.polygon.map(pt => [pt[1], pt[0]]);
       setPolygonCoords(latLngs);
       setRouteGeoJSON(null);
@@ -147,7 +143,6 @@ function App() {
     
     setIsCalculating(true);
     try {
-      // API expects [lon, lat]
       const reqCoords = polygonCoords.map(pt => [pt[1], pt[0]]);
       const response = await axios.post(`${API_URL}/calculate`, { coordinates: reqCoords });
       
@@ -179,7 +174,7 @@ function App() {
         table: tableData,
         geojson: routeGeoJSON
       }, {
-        responseType: 'blob' // Important for downloading files
+        responseType: 'blob'
       });
       
       const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -212,24 +207,9 @@ function App() {
         {/* Left side: Map */}
         <div className="map-section">
           
-          {/* Map Toolbar / Controls */}
-          <div className="map-toolbar">
-            <div className="map-toolbar-group">
-              <button 
-                className={`map-layer-btn ${mapTileType === 'osm' ? 'active' : ''}`}
-                onClick={() => setMapTileType('osm')}
-              >
-                <Layers size={14} /> Mapa Padrão
-              </button>
-              <button 
-                className={`map-layer-btn ${mapTileType === 'esri' ? 'active' : ''}`}
-                onClick={() => setMapTileType('esri')}
-              >
-                <Layers size={14} /> Satélite ESRI
-              </button>
-            </div>
-
-            {routePath.length > 0 && (
+          {/* Visual Toggles Toolbar */}
+          {routePath.length > 0 && (
+            <div className="map-toolbar" style={{ justifyContent: 'flex-end' }}>
               <div className="map-toolbar-group">
                 <label className="map-toggle-label">
                   <input 
@@ -248,22 +228,28 @@ function App() {
                   <span>➔ Setas de Sentido (Piscando)</span>
                 </label>
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
           <div className="map-container">
             <MapContainer center={[-26.3045, -48.846]} zoom={15} style={{ height: '100%', width: '100%' }}>
-              {mapTileType === 'osm' ? (
-                <TileLayer
-                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                  attribution='&copy; OpenStreetMap contributors'
-                />
-              ) : (
-                <TileLayer
-                  url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                  attribution='&copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
-                />
-              )}
+              
+              {/* LayersControl directly below zoom buttons (+/-) */}
+              <LayersControl position="topleft">
+                <LayersControl.BaseLayer checked name="Mapa Padrão (OSM)">
+                  <TileLayer
+                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    attribution='&copy; OpenStreetMap contributors'
+                  />
+                </LayersControl.BaseLayer>
+                <LayersControl.BaseLayer name="Satélite ESRI">
+                  <TileLayer
+                    url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                    attribution='&copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS'
+                  />
+                </LayersControl.BaseLayer>
+              </LayersControl>
+
               <MapUpdater polygon={polygonCoords} />
               
               {polygonCoords && (

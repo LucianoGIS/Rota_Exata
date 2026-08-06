@@ -192,27 +192,6 @@ def solve_route(G_raw: nx.MultiDiGraph, start_node, end_node=None, weight: str =
     if req_edges_count == 0:
         G_req = G_raw.copy()
 
-    # Garante conectividade entre componentes obrigatórios usando caminhos de G_raw
-    sccs = [c for c in nx.strongly_connected_components(G_req) if len(c) > 1 or G_req.degree(list(c)[0]) > 0]
-    if len(sccs) > 1:
-        main_scc = max(sccs, key=len)
-        for other_scc in sccs:
-            if other_scc == main_scc:
-                continue
-            u_src = list(other_scc)[0]
-            v_dst = list(main_scc)[0]
-            # Adiciona caminho ida e volta em G_all para conectar componentes
-            try:
-                p1 = nx.shortest_path(G_raw, u_src, v_dst, weight=weight)
-                p2 = nx.shortest_path(G_raw, v_dst, u_src, weight=weight)
-                for path in [p1, p2]:
-                    for u, v in zip(path[:-1], path[1:]):
-                        edge_data = G_raw.get_edge_data(u, v)
-                        best_key = min(edge_data, key=lambda k: edge_data[k][weight])
-                        G_req.add_edge(u, v, **edge_data[best_key])
-            except nx.NetworkXNoPath:
-                pass
-
     if start_node not in G_req:
         start_node = list(G_req.nodes)[0]
 
@@ -220,18 +199,38 @@ def solve_route(G_raw: nx.MultiDiGraph, start_node, end_node=None, weight: str =
     if open_path:
         G_req.add_edge(end_node, start_node, length=0.0, virtual=True)
 
+    # Balanceia os graus de G_req usando caminhos mais curtos de G_raw
     G_bal = balance_graph(G_req, G_all=G_raw, weight=weight)
 
-    if not nx.is_eulerian(G_bal):
-        # Fallback: garante Euleriano forçado
-        imbalance = compute_imbalance(G_bal)
-        for n, val in imbalance.items():
-            if val < 0:
-                for _ in range(-val):
-                    G_bal.add_edge(n, start_node, length=0.0, virtual=True)
-            elif val > 0:
-                for _ in range(val):
-                    G_bal.add_edge(start_node, n, length=0.0, virtual=True)
+    # Conecta componentes fortes desconexos adicionando ciclos de ida e volta
+    # (isso preserva in_degree == out_degree para todos os nós e torna o grafo conexo)
+    active_sccs = [
+        c for c in nx.strongly_connected_components(G_bal)
+        if G_bal.subgraph(c).number_of_edges() > 0
+    ]
+
+    if len(active_sccs) > 1:
+        main_scc = max(active_sccs, key=len)
+        for other_scc in active_sccs:
+            if other_scc == main_scc:
+                continue
+            u = list(main_scc)[0]
+            v = list(other_scc)[0]
+            try:
+                p1 = nx.shortest_path(G_raw, u, v, weight=weight)
+                p2 = nx.shortest_path(G_raw, v, u, weight=weight)
+                for path in [p1, p2]:
+                    for edge_u, edge_v in zip(path[:-1], path[1:]):
+                        edge_data = G_raw.get_edge_data(edge_u, edge_v)
+                        best_key = min(edge_data, key=lambda k: edge_data[k][weight])
+                        G_bal.add_edge(edge_u, edge_v, **edge_data[best_key])
+            except nx.NetworkXNoPath:
+                pass
+
+    # Garante que o start_node pertence ao componente com arestas
+    valid_nodes = [n for n in G_bal.nodes() if G_bal.degree(n) > 0]
+    if start_node not in valid_nodes and valid_nodes:
+        start_node = valid_nodes[0]
 
     circuit = list(nx.eulerian_circuit(G_bal, source=start_node, keys=True))
 
