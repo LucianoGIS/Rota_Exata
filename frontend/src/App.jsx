@@ -55,8 +55,8 @@ function App() {
   const [speedKmH, setSpeedKmH] = useState(10);
 
   // New features state
-  const [showNumbers, setShowNumbers] = useState(true);
-  const [showArrows, setShowArrows] = useState(true);
+  const [showNumbers, setShowNumbers] = useState(false);
+  const [showArrows, setShowArrows] = useState(false);
 
   // Calculations
   const totalDistanceMeters = tableData.reduce((acc, row) => acc + parseFloat(row.distancia_m), 0);
