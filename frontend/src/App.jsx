@@ -28,9 +28,9 @@ const createNumberIcon = (num) => {
 const createArrowIcon = (angle) => {
   return L.divIcon({
     className: 'flow-arrow-marker',
-    html: `<div style="transform: rotate(${angle}deg);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ff3333" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg></div>`,
-    iconSize: [18, 18],
-    iconAnchor: [9, 9]
+    html: `<div style="transform: rotate(${angle}deg);"><svg width="26" height="26" viewBox="0 0 24 24" fill="#ff2222" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 22l10-4 10 4L12 2z"/></svg></div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 13]
   });
 };
 

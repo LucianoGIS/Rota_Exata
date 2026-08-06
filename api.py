@@ -92,10 +92,20 @@ async def calculate_route(req: CalculateRequest):
             best_key = min(edge_data, key=lambda k: edge_data[k]["length"])
             data = edge_data[best_key]
             
+            u_x, u_y = G.nodes[u]['x'], G.nodes[u]['y']
+            v_x, v_y = G.nodes[v]['x'], G.nodes[v]['y']
+            
             if "geometry" in data:
                 geom = data["geometry"]
+                coords_list = list(geom.coords)
+                # Check if geometry is reversed relative to u -> v
+                d_start = (coords_list[0][0] - u_x)**2 + (coords_list[0][1] - u_y)**2
+                d_end = (coords_list[-1][0] - u_x)**2 + (coords_list[-1][1] - u_y)**2
+                if d_end < d_start:
+                    coords_list = coords_list[::-1]
+                geom = LineString(coords_list)
             else:
-                geom = LineString([(G.nodes[u]['x'], G.nodes[u]['y']), (G.nodes[v]['x'], G.nodes[v]['y'])])
+                geom = LineString([(u_x, u_y), (v_x, v_y)])
                 
             # Intersect with the requested polygon to avoid spilling outside
             clipped = geom.intersection(polygon)
