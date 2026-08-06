@@ -24,6 +24,7 @@ app.add_middleware(
 
 class CalculateRequest(BaseModel):
     coordinates: list
+    single_pass_twoway: bool = True
 
 @app.post("/upload-kml")
 async def upload_kml(file: UploadFile = File(...)):
@@ -63,7 +64,7 @@ async def calculate_route(req: CalculateRequest):
         polygon = Polygon(polygon_coords)
         
         G_osm = build_graph_from_polygon(polygon)
-        G = to_working_multidigraph(G_osm)
+        G = to_working_multidigraph(G_osm, single_pass_twoway=req.single_pass_twoway)
         
         largest_scc = max(nx.strongly_connected_components(G), key=len)
         G = G.subgraph(largest_scc).copy()

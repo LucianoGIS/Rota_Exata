@@ -57,6 +57,7 @@ function App() {
   // New features state
   const [showNumbers, setShowNumbers] = useState(false);
   const [showArrows, setShowArrows] = useState(false);
+  const [singlePassTwoWay, setSinglePassTwoWay] = useState(true);
 
   // Calculations
   const totalDistanceMeters = tableData.reduce((acc, row) => acc + parseFloat(row.distancia_m), 0);
@@ -144,7 +145,10 @@ function App() {
     setIsCalculating(true);
     try {
       const reqCoords = polygonCoords.map(pt => [pt[1], pt[0]]);
-      const response = await axios.post(`${API_URL}/calculate`, { coordinates: reqCoords });
+      const response = await axios.post(`${API_URL}/calculate`, { 
+        coordinates: reqCoords,
+        single_pass_twoway: singlePassTwoWay
+      });
       
       setRouteGeoJSON(response.data.geojson);
       setTableData(response.data.table);
@@ -312,6 +316,17 @@ function App() {
             <p className="card-desc">
               Gerar percurso inteligente que cubra todas as ruas dentro da área selecionada.
             </p>
+            
+            <div style={{ marginBottom: '15px', background: '#f8f9fa', padding: '10px 12px', borderRadius: '8px', border: '1px solid #eee' }}>
+              <label style={{ fontSize: '0.85rem', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#444' }}>
+                <input 
+                  type="checkbox" 
+                  checked={singlePassTwoWay} 
+                  onChange={(e) => setSinglePassTwoWay(e.target.checked)} 
+                />
+                <span>Passada Única em Ruas de Mão Dupla (Evita repetição de rota)</span>
+              </label>
+            </div>
             
             <button 
               className="button-primary" 

@@ -69,15 +69,18 @@ def build_graph_from_polygon(polygon: Polygon, network_type: str = "drive") -> "
 # 2. Conversão para MultiDiGraph de trabalho
 # ---------------------------------------------------------------------------
 
-def to_working_multidigraph(G_input, weight: str = "length") -> nx.MultiDiGraph:
+def to_working_multidigraph(G_input, weight: str = "length", single_pass_twoway: bool = True) -> nx.MultiDiGraph:
     """
     Converte o grafo de entrada em um MultiDiGraph de trabalho,
-    identificando arestas opcionais (retornos, alças, acessos) que não
-    possuem coleta de lixo obrigatória.
+    identificando arestas opcionais (retornos, alças, acessos) e ajustando
+    ruas de mão dupla para passada única quando solicitado.
     """
     G = nx.MultiDiGraph()
     for n, data in G_input.nodes(data=True):
         G.add_node(n, x=data.get("x"), y=data.get("y"))
+        
+    seen_twoway_osmids = set()
+    
     for u, v, data in G_input.edges(data=True):
         name = data.get("name", "Desconhecida")
         if isinstance(name, list):
@@ -88,6 +91,7 @@ def to_working_multidigraph(G_input, weight: str = "length") -> nx.MultiDiGraph:
             highway = " ".join(highway)
         junction = data.get("junction", "")
         name_str = str(name).lower()
+        osmid = data.get("osmid")
         
         # Identifica se é retorno / alça de acesso / serviço sem coleta
         is_optional = (
@@ -96,7 +100,18 @@ def to_working_multidigraph(G_input, weight: str = "length") -> nx.MultiDiGraph:
             any(k in name_str for k in ["retorno", "alça", "acesso", "turnaround"])
         )
         
-        G.add_edge(u, v, length=float(data.get(weight, 1.0)), osmid=data.get("osmid"), name=name, optional=is_optional)
+        # Se for rua de mão dupla e modo passada única estiver ativo:
+        # A primeira direção inserida é obrigatória, a direção oposta é marcada como opcional
+        if single_pass_twoway and not is_optional and osmid is not None:
+            # Identifica se o sentido inverso v->u existe no grafo original
+            if G_input.has_edge(v, u):
+                osmid_key = tuple(sorted([str(osmid), str(u), str(v)]))
+                if osmid_key in seen_twoway_osmids:
+                    is_optional = True
+                else:
+                    seen_twoway_osmids.add(osmid_key)
+
+        G.add_edge(u, v, length=float(data.get(weight, 1.0)), osmid=osmid, name=name, optional=is_optional)
     return G
 
 
