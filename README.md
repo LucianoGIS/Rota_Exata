@@ -1,4 +1,4 @@
-# Mixed Chinese Postman Problem — Cobertura de Ruas com Mão Única/Dupla
+# Cobertura de Ruas com Mão Única/Dupla
 
 Protótipo para gerar automaticamente a rota que percorre **todas as ruas**
 dentro de um polígono, respeitando o sentido de tráfego (mão única/dupla),
