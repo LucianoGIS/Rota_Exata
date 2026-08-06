@@ -1,0 +1,208 @@
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import xml.etree.ElementTree as ET
+from shapely.geometry import Polygon
+import json
+import os
+import io
+from fastapi.responses import Response
+
+# Import the existing solver functions
+from mixed_cpp_solver import build_graph_from_polygon, to_working_multidigraph, solve_route, route_to_geojson, export_route_table
+import networkx as nx
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class CalculateRequest(BaseModel):
+    coordinates: list
+
+@app.post("/upload-kml")
+async def upload_kml(file: UploadFile = File(...)):
+    contents = await file.read()
+    try:
+        # Parse KML
+        root = ET.fromstring(contents)
+        ns = {'kml': 'http://www.opengis.net/kml/2.2'}
+        # Find first Polygon coordinates
+        coords_node = root.find('.//kml:Polygon//kml:coordinates', ns)
+        if coords_node is None:
+            # Fallback namespace or lack thereof
+            coords_node = root.find('.//Polygon//coordinates')
+            
+        if coords_node is None:
+            raise HTTPException(status_code=400, detail="Nenhum polígono encontrado no KML.")
+            
+        coords_str = coords_node.text.strip()
+        points = []
+        for pair in coords_str.split():
+            parts = pair.split(',')
+            if len(parts) >= 2:
+                points.append([float(parts[0]), float(parts[1])]) # lon, lat
+                
+        if len(points) < 3:
+            raise HTTPException(status_code=400, detail="Polígono inválido.")
+            
+        return {"polygon": points}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/calculate")
+async def calculate_route(req: CalculateRequest):
+    try:
+        polygon_coords = req.coordinates
+        polygon = Polygon(polygon_coords)
+        
+        G_osm = build_graph_from_polygon(polygon)
+        G = to_working_multidigraph(G_osm)
+        
+        largest_scc = max(nx.strongly_connected_components(G), key=len)
+        G = G.subgraph(largest_scc).copy()
+        
+        start_node = list(G.nodes)[0]
+        route = solve_route(G, start_node, start_node)
+        
+        # Build table data
+        table_data = []
+        for i, (u, v) in enumerate(zip(route[:-1], route[1:])):
+            edge_data = G.get_edge_data(u, v)
+            best_key = min(edge_data, key=lambda k: edge_data[k]["length"])
+            data = edge_data[best_key]
+            table_data.append({
+                "passo": i + 1,
+                "rua": data.get("name", "Desconhecida"),
+                "distancia_m": round(data["length"], 2)
+            })
+            
+        # Build geojson coordinates using edge geometries and clip to polygon
+        from shapely.geometry import LineString, MultiLineString
+        
+        route_lines = []
+        for i, (u, v) in enumerate(zip(route[:-1], route[1:])):
+            edge_data = G.get_edge_data(u, v)
+            best_key = min(edge_data, key=lambda k: edge_data[k]["length"])
+            data = edge_data[best_key]
+            
+            if "geometry" in data:
+                geom = data["geometry"]
+            else:
+                geom = LineString([(G.nodes[u]['x'], G.nodes[u]['y']), (G.nodes[v]['x'], G.nodes[v]['y'])])
+                
+            # Intersect with the requested polygon to avoid spilling outside
+            clipped = geom.intersection(polygon)
+            
+            if clipped.is_empty:
+                continue
+                
+            if isinstance(clipped, MultiLineString):
+                for line in clipped.geoms:
+                    route_lines.append(list(line.coords))
+            elif isinstance(clipped, LineString):
+                route_lines.append(list(clipped.coords))
+            
+        geojson = {
+            "type": "FeatureCollection",
+            "features": [{
+                "type": "Feature",
+                "geometry": {"type": "MultiLineString", "coordinates": route_lines},
+                "properties": {
+                    "n_nodes": len(route),
+                    "n_edges": len(route) - 1,
+                }
+            }]
+        }
+        
+        return {"geojson": geojson, "table": table_data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ExportRequest(BaseModel):
+    table: list
+    geojson: dict = None
+
+@app.post("/export/pdf")
+async def export_pdf(req: ExportRequest):
+    from fpdf import FPDF
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(200, 10, txt="Relatório de Rota Otimizada", ln=1, align='C')
+    pdf.ln(10)
+    
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(20, 10, "Passo", 1)
+    pdf.cell(120, 10, "Rua", 1)
+    pdf.cell(40, 10, "Distancia (m)", 1)
+    pdf.ln()
+    
+    pdf.set_font("Arial", '', 10)
+    for row in req.table:
+        pdf.cell(20, 10, str(row['passo']), 1)
+        pdf.cell(120, 10, str(row['rua'])[:60], 1)
+        pdf.cell(40, 10, str(row['distancia_m']), 1)
+        pdf.ln()
+        
+    pdf_bytes = bytes(pdf.output())
+    return Response(content=pdf_bytes, media_type="application/pdf", headers={"Content-Disposition": "attachment; filename=rota.pdf"})
+
+@app.post("/export/docx")
+async def export_docx(req: ExportRequest):
+    from docx import Document
+    doc = Document()
+    doc.add_heading('Relatório de Rota Otimizada', 0)
+    
+    table = doc.add_table(rows=1, cols=3)
+    table.style = 'Table Grid'
+    hdr_cells = table.rows[0].cells
+    hdr_cells[0].text = 'Passo'
+    hdr_cells[1].text = 'Rua'
+    hdr_cells[2].text = 'Distância (m)'
+    
+    for row in req.table:
+        row_cells = table.add_row().cells
+        row_cells[0].text = str(row['passo'])
+        row_cells[1].text = str(row['rua'])
+        row_cells[2].text = str(row['distancia_m'])
+        
+    f = io.BytesIO()
+    doc.save(f)
+    return Response(content=f.getvalue(), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Content-Disposition": "attachment; filename=rota.docx"})
+
+@app.post("/export/html")
+async def export_html(req: ExportRequest):
+    html = "<html><head><meta charset='utf-8'><title>Rota Otimizada</title>"
+    html += "<style>body{font-family:sans-serif;} table{border-collapse:collapse;width:100%;} th,td{border:1px solid #ccc;padding:8px;text-align:left;} th{background:#eee;}</style></head><body>"
+    html += "<h2>Relatório de Rota Otimizada</h2>"
+    html += "<table><tr><th>Passo</th><th>Rua</th><th>Distância (m)</th></tr>"
+    for row in req.table:
+        html += f"<tr><td>{row['passo']}</td><td>{row['rua']}</td><td>{row['distancia_m']}</td></tr>"
+    html += "</table></body></html>"
+    return Response(content=html, media_type="text/html", headers={"Content-Disposition": "attachment; filename=rota.html"})
+
+@app.post("/export/kml")
+async def export_kml(req: ExportRequest):
+    import simplekml
+    kml = simplekml.Kml()
+    geom_type = req.geojson['features'][0]['geometry']['type']
+    coords = req.geojson['features'][0]['geometry']['coordinates']
+    
+    if geom_type == 'MultiLineString':
+        # Create a folder to group the lines
+        fol = kml.newfolder(name="Rota Otimizada")
+        for i, line_coords in enumerate(coords):
+            fol.newlinestring(name=f"Trecho {i+1}", description="Caminho do veículo", coords=line_coords)
+    else:
+        kml.newlinestring(name="Rota Otimizada", description="Caminho do veículo", coords=coords)
+        
+    kml_str = kml.kml()
+    return Response(content=kml_str, media_type="application/vnd.google-earth.kml+xml", headers={"Content-Disposition": "attachment; filename=rota.kml"})

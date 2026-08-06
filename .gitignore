@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+rota_resultado.geojson
+rota.pdf
+rota.kml
+rota.docx
+rota.html
+frontend/node_modules/
+frontend/dist/
