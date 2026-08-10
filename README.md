@@ -1,86 +1,108 @@
-# Cobertura de Ruas com Mão Única/Dupla
+# Rota Exata - Otimização de Percurso para Coleta de Lixo
 
-Protótipo para gerar automaticamente a rota que percorre **todas as ruas**
-dentro de um polígono, respeitando o sentido de tráfego (mão única/dupla),
-minimizando a distância/tempo total.
+Aplicação web interativa para geração e otimização automática de rotas para veículos de serviço (ex.: caminhão de lixo) cobrindo **100% das ruas** dentro de um polígono delimitado (via KML), respeitando o sentido de tráfego e minimizando repetições.
 
-## Instalação
+---
+
+## 📋 Pré-requisitos
+
+Antes de iniciar em um novo computador, certifique-se de ter instalado:
+
+- **Python 3.10 ou superior**: [https://www.python.org/downloads/](https://www.python.org/downloads/)
+- **Node.js 18 ou superior** (com npm): [https://nodejs.org/](https://nodejs.org/)
+- **Git**: [https://git-scm.com/](https://git-scm.com/)
+
+---
+
+## 🚀 Passo a Passo para Iniciar a Aplicação em Outro Computador
+
+### 1. Clonar o Repositório
+
+Abra o terminal ou prompt de comando e execute:
 
 ```bash
-pip install osmnx networkx shapely
+git clone https://github.com/LucianoGIS/Rota_Exata.git
+cd Rota_Exata
 ```
 
-## Uso básico
+---
 
-```python
-from shapely.geometry import Polygon
-from mixed_cpp_solver import (
-    build_graph_from_polygon, to_working_multidigraph, solve_route, route_to_geojson
-)
+### 2. Configurar e Instalar o Backend (Python / FastAPI)
 
-# 1. Defina seu polígono (lon, lat) — pode desenhar no QGIS e exportar as coordenadas
-polygon = Polygon([
-    (-48.848, -26.300), (-48.840, -26.300),
-    (-48.840, -26.310), (-48.848, -26.310),
-])
+No diretório raiz do projeto (`Rota_Exata`):
 
-# 2. Baixa a malha viária real do OpenStreetMap dentro do polígono
-G_osm = build_graph_from_polygon(polygon)
-G = to_working_multidigraph(G_osm)
+```bash
+# (Opcional, mas recomendado) Criar e ativar ambiente virtual Python
+python -m venv venv
 
-# 3. Identifique os nós de entrada/saída (os IDs vêm do OSM;
-#    o jeito mais fácil é usar ox.distance.nearest_nodes(G_osm, lon, lat))
-start_node = ...  # nó de entrada do caminhão
-end_node = ...     # nó de saída (pode ser igual ao start, se for um circuito)
+# No Windows:
+venv\Scripts\activate
 
-# 4. Resolve a rota (já balanceia o grafo internamente)
-route = solve_route(G, start_node, end_node)
+# No Linux/macOS:
+# source venv/bin/activate
 
-# 5. Exporta como GeoJSON para abrir no QGIS
-route_to_geojson(G, route, "rota_resultado.geojson")
+# Instalar as dependências do backend Python
+pip install fastapi uvicorn osmnx networkx shapely fpdf python-docx simplekml
 ```
 
-## Abrindo o resultado no QGIS
+---
 
-1. `Camada > Adicionar Camada > Adicionar Camada Vetorial`
-2. Selecione o arquivo `rota_resultado.geojson`
-3. A rota aparece como uma única `LineString` — para visualizar a ordem
-   de percurso (útil pois a rota repete trechos), use o plugin
-   **"Animate!"** do QGIS ou o modo de simbologia por "regra" com base na
-   posição do vértice.
+### 3. Configurar e Instalar o Frontend (React / Vite)
 
-Para desenhar o próprio polígono da área no QGIS e exportar as coordenadas:
-`Camada > Criar Camada > Nova Camada Vetorial (Polígono)` → desenhe →
-clique direito na camada → `Exportar > Salvar Feições Como...` → GeoJSON.
-Depois é só ler esse GeoJSON com `shapely`/`geopandas` no lugar da lista
-de coordenadas manual do exemplo.
+Ainda no projeto, instale as dependências do frontend Node.js:
 
-## Como encontrar os nós de entrada/saída (start_node / end_node)
-
-```python
-import osmnx as ox
-start_node = ox.distance.nearest_nodes(G_osm, X=lon_entrada, Y=lat_entrada)
-end_node = ox.distance.nearest_nodes(G_osm, X=lon_saida, Y=lat_saida)
+```bash
+cd frontend
+npm install
+cd ..
 ```
 
-## Limitações e próximos passos
+---
 
-- O Mixed Chinese Postman Problem exato é NP-difícil; este solver usa uma
-  heurística de fluxo de custo mínimo (ótima para grafos 100% dirigidos ou
-  100% não-dirigidos, muito boa na prática para o caso misto real de malhas
-  viárias). Para áreas muito grandes ou com topologia complexa, considere
-  validar o resultado visualmente no QGIS.
-- Assume que a malha dentro do polígono é conexa. Se houver ruas isoladas
-  (sem conexão com o resto), o solver lança um erro — nesse caso, ajuste
-  o polígono ou trate os componentes separadamente.
-- `network_type="drive"` no OSMnx já filtra só vias para veículos e já
-  aplica corretamente as tags `oneway` do OpenStreetMap.
-- Para minimizar TEMPO em vez de DISTÂNCIA, troque o `weight` usado
-  (ex.: calcule `travel_time = length / speed` por aresta e passe
-  `weight="travel_time"` nas funções).
+### 4. Executar a Aplicação
 
-## Arquivos
+Para utilizar a aplicação, você precisará manter **dois terminais abertos**:
 
-- `mixed_cpp_solver.py` — biblioteca principal (todas as funções)
-- `test_synthetic.py` — teste com grafo pequeno sintético (não depende de
-  internet/OSM), útil para validar a lógica rapidamente
+#### Terminal 1: Iniciar o Backend (FastAPI / Uvicorn)
+No diretório raiz do projeto (`Rota_Exata`), com o ambiente virtual ativado (se criou):
+
+```bash
+python -m uvicorn api:app --host 127.0.0.1 --port 8000
+```
+> O backend rodará em: `http://127.0.0.1:8000`
+
+---
+
+#### Terminal 2: Iniciar o Frontend (React / Vite)
+Em uma nova janela de terminal, navegue até a pasta `frontend`:
+
+```bash
+cd Rota_Exata/frontend
+npm run dev
+```
+> O frontend rodará em: `http://localhost:5173/`
+
+---
+
+## 💻 Como Utilizar a Aplicação
+
+1. Abra o navegador em **`http://localhost:5173/`**.
+2. Clique no botão **"Selecionar e Validar KML"** e escolha o arquivo `.kml` contendo a área da coleta.
+3. Defina as opções desejadas:
+   - **Passada Única em Ruas de Mão Dupla**: Evita que o caminhão passe no sentido oposto de uma rua residencial que já foi limpa.
+   - **Ignorar Retornos / Travessias Desnecessários**: Garante que o caminhão não faça retornos de canteiro desnecessários em avenidas.
+4. Clique em **"Gerar Rota Otimizada"**.
+5. Navegue pela rota:
+   - Use as **Teclas de Seta do Teclado (Esquerda ◄ / Direita ►)** para avançar ou voltar nó por nó no mapa com acompanhamento automático em tempo real.
+   - Ajuste o **Espaçamento Numérico (15m, 25m, 50m, 100m)** para limpar a visualização dos números na tela.
+   - Dê zoom no mapa até o nível **22 (Zoom Ultra Detalhado)**.
+6. Baixe os relatórios oficiais completos com indicadores de manobra (ex.: *Vire à direita*, *Vire à esquerda*, *Siga em frente*, *Faça o retorno*) nos formatos **HTML**, **DOCX (Word)**, **PDF** ou **GeoJSON / KML**.
+
+---
+
+## 🛠️ Estrutura do Projeto
+
+- `api.py` — Servidor FastAPI (Rotas de cálculo e exportação de PDF, DOCX, HTML, KML).
+- `mixed_cpp_solver.py` — Algoritmo solucionador Euleriano Misto (download do OSM, grafo de trabalho e balanceador de fluxo).
+- `frontend/` — Interface web React + Leaflet + Vite.
+- `test_synthetic.py` — Teste unitário sintético offline da lógica do solucionador.
