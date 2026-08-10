@@ -514,13 +514,27 @@ function App() {
                   <thead>
                     <tr>
                       <th>#</th>
-                      <th>Rua</th>
+                      <th>Direção</th>
+                      <th>Rua / Trecho</th>
                       <th>Distância</th>
                     </tr>
                   </thead>
                   <tbody>
                     {tableData.map((row, idx) => {
                       const isActiveRow = currentVertexIdx === idx;
+                      const dirText = row.direcao || 'Siga em frente';
+                      
+                      let dirStyle = { background: '#e2e8f0', color: '#334155' };
+                      if (dirText.includes('direita')) {
+                        dirStyle = { background: '#e0f2fe', color: '#0369a1' };
+                      } else if (dirText.includes('esquerda')) {
+                        dirStyle = { background: '#f0fdf4', color: '#15803d' };
+                      } else if (dirText.includes('retorno')) {
+                        dirStyle = { background: '#fef3c7', color: '#b45309' };
+                      } else if (dirText.includes('Início') || dirText.includes('Inicio')) {
+                        dirStyle = { background: '#f3e8ff', color: '#6b21a8' };
+                      }
+
                       return (
                         <tr 
                           key={idx}
@@ -531,7 +545,19 @@ function App() {
                           }}
                           style={{ cursor: 'pointer' }}
                         >
-                          <td>{row.passo}</td>
+                          <td><b>#{row.passo}</b></td>
+                          <td>
+                            <span style={{ 
+                              display: 'inline-block', 
+                              padding: '3px 7px', 
+                              borderRadius: '4px', 
+                              fontSize: '0.75rem', 
+                              fontWeight: '600',
+                              ...dirStyle 
+                            }}>
+                              {dirText}
+                            </span>
+                          </td>
                           <td>{row.rua}</td>
                           <td>{row.distancia_m}m</td>
                         </tr>
