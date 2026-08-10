@@ -22,6 +22,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+async def root():
+    return {
+        "status": "online",
+        "mensagem": "API Rota Exata está rodando com sucesso!",
+        "documentacao_swagger": "http://127.0.0.1:8000/docs",
+        "interface_web": "http://localhost:5173/"
+    }
+
 class CalculateRequest(BaseModel):
     coordinates: list
     single_pass_twoway: bool = True
