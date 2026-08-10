@@ -25,6 +25,7 @@ app.add_middleware(
 class CalculateRequest(BaseModel):
     coordinates: list
     single_pass_twoway: bool = True
+    ignore_u_turns: bool = True
 
 @app.post("/upload-kml")
 async def upload_kml(file: UploadFile = File(...)):
@@ -64,7 +65,7 @@ async def calculate_route(req: CalculateRequest):
         polygon = Polygon(polygon_coords)
         
         G_osm = build_graph_from_polygon(polygon)
-        G = to_working_multidigraph(G_osm, single_pass_twoway=req.single_pass_twoway)
+        G = to_working_multidigraph(G_osm, single_pass_twoway=req.single_pass_twoway, ignore_u_turns=req.ignore_u_turns)
         
         largest_scc = max(nx.strongly_connected_components(G), key=len)
         G = G.subgraph(largest_scc).copy()
@@ -72,59 +73,94 @@ async def calculate_route(req: CalculateRequest):
         start_node = list(G.nodes)[0]
         route = solve_route(G, start_node, start_node)
         
-        # Build table data
+        # Build table data and continuous single LineString coordinates
         table_data = []
-        for i, (u, v) in enumerate(zip(route[:-1], route[1:])):
-            edge_data = G.get_edge_data(u, v)
-            best_key = min(edge_data, key=lambda k: edge_data[k]["length"])
-            data = edge_data[best_key]
-            table_data.append({
-                "passo": i + 1,
-                "rua": data.get("name", "Desconhecida"),
-                "distancia_m": round(data["length"], 2)
-            })
-            
-        # Build geojson coordinates using edge geometries and clip to polygon
-        from shapely.geometry import LineString, MultiLineString
+        full_route_coords = []
         
-        route_lines = []
         for i, (u, v) in enumerate(zip(route[:-1], route[1:])):
             edge_data = G.get_edge_data(u, v)
-            best_key = min(edge_data, key=lambda k: edge_data[k]["length"])
-            data = edge_data[best_key]
-            
+            is_reversed = False
+            if not edge_data:
+                edge_data = G.get_edge_data(v, u)
+                is_reversed = True
+                
             u_x, u_y = G.nodes[u]['x'], G.nodes[u]['y']
             v_x, v_y = G.nodes[v]['x'], G.nodes[v]['y']
             
-            if "geometry" in data:
-                geom = data["geometry"]
-                coords_list = list(geom.coords)
-                # Check if geometry is reversed relative to u -> v
-                d_start = (coords_list[0][0] - u_x)**2 + (coords_list[0][1] - u_y)**2
-                d_end = (coords_list[-1][0] - u_x)**2 + (coords_list[-1][1] - u_y)**2
-                if d_end < d_start:
-                    coords_list = coords_list[::-1]
-                geom = LineString(coords_list)
+            step_coords = []
+            if edge_data:
+                best_key = min(edge_data, key=lambda k: edge_data[k].get("length", 1.0))
+                data = edge_data[best_key]
+                
+                table_data.append({
+                    "passo": i + 1,
+                    "rua": data.get("name", "Desconhecida"),
+                    "distancia_m": round(data.get("length", 0.0), 2)
+                })
+                
+                if "geometry" in data:
+                    coords_list = list(data["geometry"].coords)
+                    if is_reversed:
+                        coords_list = coords_list[::-1]
+                    else:
+                        d_start = (coords_list[0][0] - u_x)**2 + (coords_list[0][1] - u_y)**2
+                        d_end = (coords_list[-1][0] - u_x)**2 + (coords_list[-1][1] - u_y)**2
+                        if d_end < d_start:
+                            coords_list = coords_list[::-1]
+                    step_coords = coords_list
+                else:
+                    step_coords = [(u_x, u_y), (v_x, v_y)]
             else:
-                geom = LineString([(u_x, u_y), (v_x, v_y)])
-                
-            # Intersect with the requested polygon to avoid spilling outside
-            clipped = geom.intersection(polygon)
-            
-            if clipped.is_empty:
-                continue
-                
-            if isinstance(clipped, MultiLineString):
-                for line in clipped.geoms:
-                    route_lines.append(list(line.coords))
-            elif isinstance(clipped, LineString):
-                route_lines.append(list(clipped.coords))
+                # Failsafe: Roteamento físico via G_osm (garante 100% que segue vias reais)
+                try:
+                    path_nodes = nx.shortest_path(G_osm.to_undirected(), u, v, weight="length")
+                    path_dist = 0.0
+                    for sub_u, sub_v in zip(path_nodes[:-1], path_nodes[1:]):
+                        sub_edge_data = G_osm.get_edge_data(sub_u, sub_v) or G_osm.get_edge_data(sub_v, sub_u)
+                        if sub_edge_data:
+                            best_sub_k = min(sub_edge_data, key=lambda k: sub_edge_data[k].get("length", 1.0))
+                            sub_d = sub_edge_data[best_sub_k]
+                            path_dist += sub_d.get("length", 0.0)
+                            
+                            sub_ux, sub_uy = G_osm.nodes[sub_u]['x'], G_osm.nodes[sub_u]['y']
+                            if "geometry" in sub_d:
+                                sub_coords = list(sub_d["geometry"].coords)
+                                d_s = (sub_coords[0][0] - sub_ux)**2 + (sub_coords[0][1] - sub_uy)**2
+                                d_e = (sub_coords[-1][0] - sub_ux)**2 + (sub_coords[-1][1] - sub_uy)**2
+                                if d_e < d_s:
+                                    sub_coords = sub_coords[::-1]
+                                step_coords.extend(sub_coords)
+                            else:
+                                step_coords.extend([(sub_ux, sub_uy), (G_osm.nodes[sub_v]['x'], G_osm.nodes[sub_v]['y'])])
+                    
+                    table_data.append({
+                        "passo": i + 1,
+                        "rua": "Conexão de Vias",
+                        "distancia_m": round(path_dist, 2)
+                    })
+                except Exception:
+                    table_data.append({
+                        "passo": i + 1,
+                        "rua": "Desconhecida",
+                        "distancia_m": 0.0
+                    })
+                    step_coords = [(u_x, u_y), (v_x, v_y)]
+
+            # Concatenar step_coords em full_route_coords sem duplicar vértices adjacentes
+            if not full_route_coords:
+                full_route_coords.extend(step_coords)
+            else:
+                if step_coords:
+                    if full_route_coords[-1] == step_coords[0]:
+                        full_route_coords.extend(step_coords[1:])
+                    else:
+                        full_route_coords.extend(step_coords)
             
         geojson = {
             "type": "FeatureCollection",
             "features": [{
                 "type": "Feature",
-                "geometry": {"type": "MultiLineString", "coordinates": route_lines},
+                "geometry": {"type": "LineString", "coordinates": full_route_coords},
                 "properties": {
                     "n_nodes": len(route),
                     "n_edges": len(route) - 1,

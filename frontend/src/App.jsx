@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Polygon, Polyline, Marker, LayersControl, useMap } from 'react-leaflet';
 import { Upload, Map as MapIcon, Download, Loader2, FileText, File, FileCode, Code, Eye, Layers } from 'lucide-react';
 import axios from 'axios';
@@ -15,12 +15,12 @@ let DefaultIcon = L.icon({
 L.Marker.prototype.options.icon = DefaultIcon;
 
 // Helper to create vertex number HTML marker
-const createNumberIcon = (num) => {
+const createNumberIcon = (num, isActive = false) => {
   return L.divIcon({
-    className: 'vertex-number-marker',
+    className: `vertex-number-marker ${isActive ? 'active-vertex' : ''}`,
     html: `<div>${num}</div>`,
-    iconSize: [22, 22],
-    iconAnchor: [11, 11]
+    iconSize: isActive ? [34, 34] : [24, 24],
+    iconAnchor: isActive ? [17, 17] : [12, 12]
   });
 };
 
@@ -34,13 +34,23 @@ const createArrowIcon = (angle) => {
   });
 };
 
-function MapUpdater({ polygon, route }) {
+function MapUpdater({ polygon }) {
   const map = useMap();
   React.useEffect(() => {
     if (polygon && polygon.length > 0) {
       map.fitBounds(polygon);
     }
   }, [polygon, map]);
+  return null;
+}
+
+function MapFocusHandler({ activeVertex }) {
+  const map = useMap();
+  React.useEffect(() => {
+    if (activeVertex) {
+      map.panTo([activeVertex.lat, activeVertex.lng], { animate: true, duration: 0.3 });
+    }
+  }, [activeVertex, map]);
   return null;
 }
 
@@ -58,6 +68,9 @@ function App() {
   const [showNumbers, setShowNumbers] = useState(false);
   const [showArrows, setShowArrows] = useState(false);
   const [singlePassTwoWay, setSinglePassTwoWay] = useState(true);
+  const [ignoreUTurns, setIgnoreUTurns] = useState(true);
+  const [minVertexDistance, setMinVertexDistance] = useState(25);
+  const [currentVertexIdx, setCurrentVertexIdx] = useState(0);
 
   // Calculations
   const totalDistanceMeters = tableData.reduce((acc, row) => acc + parseFloat(row.distancia_m), 0);
@@ -72,7 +85,18 @@ function App() {
     return `${m} min`;
   };
 
-  // Helper to compute route markers (vertices & arrows)
+  const getDistanceMeters = (lat1, lng1, lat2, lng2) => {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLng/2) * Math.sin(dLng/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  };
+
+  // Helper to compute route markers (vertices & arrows) with intelligent downsampling
   const getRouteMarkers = () => {
     const vertices = [];
     const arrows = [];
@@ -87,23 +111,53 @@ function App() {
     }
 
     let stepNum = 1;
+    let lastVertexPt = null;
+    let lastArrowPt = null;
+
     lines.forEach((line) => {
       line.forEach((pt, idx) => {
-        if (idx === 0 || idx === line.length - 1 || idx % 2 === 0) {
-          vertices.push({ lat: pt[0], lng: pt[1], num: stepNum++ });
-        }
+        const isFirstInLine = idx === 0;
         
+        let shouldAddVertex = false;
+        if (!lastVertexPt) {
+          shouldAddVertex = true;
+        } else {
+          const dist = getDistanceMeters(lastVertexPt[0], lastVertexPt[1], pt[0], pt[1]);
+          if (dist >= minVertexDistance || isFirstInLine) {
+            shouldAddVertex = true;
+          }
+        }
+
+        if (shouldAddVertex) {
+          vertices.push({ lat: pt[0], lng: pt[1], num: stepNum++ });
+          lastVertexPt = pt;
+        }
+
         if (idx < line.length - 1) {
           const pt1 = line[idx];
           const pt2 = line[idx + 1];
-          const midLat = (pt1[0] + pt2[0]) / 2;
-          const midLng = (pt1[1] + pt2[1]) / 2;
+          const segDist = getDistanceMeters(pt1[0], pt1[1], pt2[0], pt2[1]);
           
-          const dLat = pt2[0] - pt1[0];
-          const dLng = pt2[1] - pt1[1];
-          const angle = Math.atan2(dLng, dLat) * (180 / Math.PI);
-          
-          arrows.push({ lat: midLat, lng: midLng, angle });
+          let shouldAddArrow = false;
+          if (!lastArrowPt) {
+            shouldAddArrow = true;
+          } else {
+            const distFromLastArrow = getDistanceMeters(lastArrowPt[0], lastArrowPt[1], pt1[0], pt1[1]);
+            if (distFromLastArrow >= 40) {
+              shouldAddArrow = true;
+            }
+          }
+
+          if (shouldAddArrow && segDist >= 4) {
+            const midLat = (pt1[0] + pt2[0]) / 2;
+            const midLng = (pt1[1] + pt2[1]) / 2;
+            const dLat = pt2[0] - pt1[0];
+            const dLng = pt2[1] - pt1[1];
+            const angle = Math.atan2(dLng, dLat) * (180 / Math.PI);
+            
+            arrows.push({ lat: midLat, lng: midLng, angle });
+            lastArrowPt = [midLat, midLng];
+          }
         }
       });
     });
@@ -112,6 +166,27 @@ function App() {
   };
 
   const { vertices, arrows } = getRouteMarkers();
+
+  // Keyboard navigation for vertex numbers (ArrowLeft / ArrowRight)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (!vertices || vertices.length === 0) return;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        setShowNumbers(true);
+        setCurrentVertexIdx((prev) => Math.min(prev + 1, vertices.length - 1));
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setShowNumbers(true);
+        setCurrentVertexIdx((prev) => Math.max(prev - 1, 0));
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [vertices]);
 
   const API_URL = 'http://127.0.0.1:8000';
 
@@ -132,6 +207,7 @@ function App() {
       setRouteGeoJSON(null);
       setTableData([]);
       setRoutePath([]);
+      setCurrentVertexIdx(0);
     } catch (error) {
       alert("Erro ao validar KML: " + (error.response?.data?.detail || error.message));
     } finally {
@@ -147,7 +223,8 @@ function App() {
       const reqCoords = polygonCoords.map(pt => [pt[1], pt[0]]);
       const response = await axios.post(`${API_URL}/calculate`, { 
         coordinates: reqCoords,
-        single_pass_twoway: singlePassTwoWay
+        single_pass_twoway: singlePassTwoWay,
+        ignore_u_turns: ignoreUTurns
       });
       
       setRouteGeoJSON(response.data.geojson);
@@ -164,6 +241,7 @@ function App() {
       }
       
       setRoutePath(routePoints);
+      setCurrentVertexIdx(0);
       
     } catch (error) {
       alert("Erro ao calcular rota: " + (error.response?.data?.detail || error.message));
@@ -211,10 +289,56 @@ function App() {
         {/* Left side: Map */}
         <div className="map-section">
           
-          {/* Visual Toggles Toolbar */}
+          {/* Visual Toggles & Navigation Toolbar */}
           {routePath.length > 0 && (
-            <div className="map-toolbar" style={{ justifyContent: 'flex-end' }}>
+            <div className="map-toolbar" style={{ justifyContent: 'space-between' }}>
+              <div className="nav-controls-bar">
+                <span>Navegar Vértices:</span>
+                <button 
+                  className="nav-btn" 
+                  disabled={currentVertexIdx <= 0}
+                  onClick={() => {
+                    setShowNumbers(true);
+                    setCurrentVertexIdx(prev => Math.max(prev - 1, 0));
+                  }}
+                >
+                  ◀ Anterior
+                </button>
+                <span style={{ fontWeight: '700', color: 'var(--primary-color)' }}>
+                  {vertices.length > 0 ? `${currentVertexIdx + 1} / ${vertices.length}` : '0 / 0'}
+                </span>
+                <button 
+                  className="nav-btn" 
+                  disabled={currentVertexIdx >= vertices.length - 1}
+                  onClick={() => {
+                    setShowNumbers(true);
+                    setCurrentVertexIdx(prev => Math.min(prev + 1, vertices.length - 1));
+                  }}
+                >
+                  Próximo ▶
+                </button>
+                <span style={{ fontSize: '0.78rem', color: '#666', marginLeft: '6px' }}>
+                  (Teclas ◄ e ►)
+                </span>
+              </div>
+
               <div className="map-toolbar-group">
+                <label className="map-toggle-label" style={{ gap: '6px' }}>
+                  <span>Espaçamento:</span>
+                  <select 
+                    value={minVertexDistance} 
+                    onChange={(e) => {
+                      setMinVertexDistance(Number(e.target.value));
+                      setCurrentVertexIdx(0);
+                    }}
+                    style={{ border: '1px solid #ccc', borderRadius: '4px', padding: '2px 6px', fontSize: '0.8rem', cursor: 'pointer' }}
+                  >
+                    <option value={15}>15m (Detalhado)</option>
+                    <option value={25}>25m (Recomendado)</option>
+                    <option value={50}>50m (Espaçado)</option>
+                    <option value={100}>100m (Principal)</option>
+                  </select>
+                </label>
                 <label className="map-toggle-label">
                   <input 
                     type="checkbox" 
@@ -236,25 +360,33 @@ function App() {
           )}
 
           <div className="map-container">
-            <MapContainer center={[-26.3045, -48.846]} zoom={15} style={{ height: '100%', width: '100%' }}>
+            <MapContainer center={[-26.3045, -48.846]} zoom={15} maxZoom={22} style={{ height: '100%', width: '100%' }}>
               
               {/* LayersControl directly below zoom buttons (+/-) */}
               <LayersControl position="topleft">
                 <LayersControl.BaseLayer checked name="Mapa Padrão (OSM)">
                   <TileLayer
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    maxZoom={22}
+                    maxNativeZoom={19}
                     attribution='&copy; OpenStreetMap contributors'
                   />
                 </LayersControl.BaseLayer>
                 <LayersControl.BaseLayer name="Satélite ESRI">
                   <TileLayer
                     url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                    maxZoom={22}
+                    maxNativeZoom={19}
                     attribution='&copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS'
                   />
                 </LayersControl.BaseLayer>
               </LayersControl>
 
               <MapUpdater polygon={polygonCoords} />
+              
+              {showNumbers && vertices.length > 0 && (
+                <MapFocusHandler activeVertex={vertices[currentVertexIdx]} />
+              )}
               
               {polygonCoords && (
                 <Polygon positions={polygonCoords} pathOptions={{ color: '#98c43d', fillColor: '#98c43d', fillOpacity: 0.2 }} />
@@ -269,7 +401,8 @@ function App() {
                 <Marker 
                   key={`v-${idx}`} 
                   position={[v.lat, v.lng]} 
-                  icon={createNumberIcon(v.num)} 
+                  icon={createNumberIcon(v.num, idx === currentVertexIdx)} 
+                  zIndexOffset={idx === currentVertexIdx ? 1000 : 0}
                 />
               ))}
 
@@ -317,7 +450,7 @@ function App() {
               Gerar percurso inteligente que cubra todas as ruas dentro da área selecionada.
             </p>
             
-            <div style={{ marginBottom: '15px', background: '#f8f9fa', padding: '10px 12px', borderRadius: '8px', border: '1px solid #eee' }}>
+            <div style={{ marginBottom: '15px', background: '#f8f9fa', padding: '10px 12px', borderRadius: '8px', border: '1px solid #eee', display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <label style={{ fontSize: '0.85rem', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#444' }}>
                 <input 
                   type="checkbox" 
@@ -325,6 +458,14 @@ function App() {
                   onChange={(e) => setSinglePassTwoWay(e.target.checked)} 
                 />
                 <span>Passada Única em Ruas de Mão Dupla (Evita repetição de rota)</span>
+              </label>
+              <label style={{ fontSize: '0.85rem', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#444' }}>
+                <input 
+                  type="checkbox" 
+                  checked={ignoreUTurns} 
+                  onChange={(e) => setIgnoreUTurns(e.target.checked)} 
+                />
+                <span>Ignorar Retornos / Travessias de Canteiro Desnecessários</span>
               </label>
             </div>
             
@@ -378,13 +519,24 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {tableData.map((row, idx) => (
-                      <tr key={idx}>
-                        <td>{row.passo}</td>
-                        <td>{row.rua}</td>
-                        <td>{row.distancia_m}m</td>
-                      </tr>
-                    ))}
+                    {tableData.map((row, idx) => {
+                      const isActiveRow = currentVertexIdx === idx;
+                      return (
+                        <tr 
+                          key={idx}
+                          className={isActiveRow ? 'tr-active-step' : ''}
+                          onClick={() => {
+                            setShowNumbers(true);
+                            setCurrentVertexIdx(idx);
+                          }}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <td>{row.passo}</td>
+                          <td>{row.rua}</td>
+                          <td>{row.distancia_m}m</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

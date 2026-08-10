@@ -286,6 +286,71 @@ body {
   font-size: 12px;
   font-weight: 700;
   box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+  transition: all 0.2s ease;
+}
+
+.vertex-number-marker.active-vertex {
+  z-index: 9999 !important;
+}
+
+.vertex-number-marker.active-vertex div {
+  background: #ff9800;
+  color: white;
+  border: 3px solid white;
+  width: 34px;
+  height: 34px;
+  font-size: 14px;
+  box-shadow: 0 0 14px rgba(255, 152, 0, 0.9), 0 4px 12px rgba(0,0,0,0.5);
+  animation: pulse-active-vertex 1.2s infinite ease-in-out;
+}
+
+@keyframes pulse-active-vertex {
+  0%, 100% { transform: scale(1.15); box-shadow: 0 0 14px rgba(255, 152, 0, 0.9); }
+  50% { transform: scale(1.35); box-shadow: 0 0 22px rgba(255, 152, 0, 1); }
+}
+
+.nav-controls-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f4f9ea;
+  border: 1px solid #c8e19b;
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #333;
+}
+
+.nav-btn {
+  background: white;
+  border: 1.5px solid var(--primary-color);
+  color: var(--primary-color);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: all 0.2s ease;
+}
+
+.nav-btn:hover:not(:disabled) {
+  background: var(--primary-color);
+  color: white;
+}
+
+.nav-btn:disabled {
+  border-color: #ccc;
+  color: #ccc;
+  cursor: not-allowed;
+}
+
+.tr-active-step {
+  background-color: #fff8e1 !important;
+  font-weight: 600;
 }
 
 .flow-arrow-marker div {
