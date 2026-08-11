@@ -6,6 +6,7 @@ from shapely.geometry import Polygon
 import json
 import os
 import io
+import math
 from fastapi.responses import Response
 
 # Import the existing solver functions
@@ -35,7 +36,9 @@ class CalculateRequest(BaseModel):
     coordinates: list
     single_pass_twoway: bool = True
     ignore_u_turns: bool = True
-
+    avoid_private: bool = True
+    start_point: list = None
+    end_point: list = None
 @app.post("/upload-kml")
 async def upload_kml(file: UploadFile = File(...)):
     contents = await file.read()
@@ -105,6 +108,19 @@ def calculate_bearing_turn(u_prev, u, v, G_nodes):
         return "Faça o retorno"
 
 
+def find_nearest_node(G, lat, lng):
+    min_dist = float('inf')
+    nearest = None
+    for n, data in G.nodes(data=True):
+        x, y = data.get('x'), data.get('y')
+        if x is not None and y is not None:
+            dist = (x - lng)**2 + (y - lat)**2
+            if dist < min_dist:
+                min_dist = dist
+                nearest = n
+    return nearest
+
+
 @app.post("/calculate")
 async def calculate_route(req: CalculateRequest):
     try:
@@ -112,13 +128,22 @@ async def calculate_route(req: CalculateRequest):
         polygon = Polygon(polygon_coords)
         
         G_osm = build_graph_from_polygon(polygon)
-        G = to_working_multidigraph(G_osm, single_pass_twoway=req.single_pass_twoway, ignore_u_turns=req.ignore_u_turns)
+        G = to_working_multidigraph(G_osm, single_pass_twoway=req.single_pass_twoway, ignore_u_turns=req.ignore_u_turns, avoid_private=req.avoid_private)
         
-        largest_scc = max(nx.strongly_connected_components(G), key=len)
-        G = G.subgraph(largest_scc).copy()
+        largest_wcc = max(nx.weakly_connected_components(G), key=len)
+        G = G.subgraph(largest_wcc).copy()
         
-        start_node = list(G.nodes)[0]
-        route = solve_route(G, start_node, start_node)
+        if req.start_point:
+            start_node = find_nearest_node(G, req.start_point[0], req.start_point[1])
+        else:
+            start_node = list(G.nodes)[0]
+
+        if req.end_point:
+            end_node = find_nearest_node(G, req.end_point[0], req.end_point[1])
+        else:
+            end_node = start_node
+            
+        route = solve_route(G, start_node, end_node)
         
         # Build table data and continuous single LineString coordinates
         table_data = []

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, Polygon, Polyline, Marker, LayersControl, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Polygon, Polyline, Marker, LayersControl, useMap, useMapEvents } from 'react-leaflet';
 import { Upload, Map as MapIcon, Download, Loader2, FileText, File, FileCode, Code, Eye, Layers } from 'lucide-react';
 import axios from 'axios';
 import './index.css';
@@ -34,6 +34,24 @@ const createArrowIcon = (angle) => {
   });
 };
 
+const createStartIcon = () => {
+  return L.divIcon({
+    className: 'start-marker',
+    html: `<div style="font-size: 24px;">📍</div>`,
+    iconSize: [24, 24],
+    iconAnchor: [12, 24]
+  });
+};
+
+const createEndIcon = () => {
+  return L.divIcon({
+    className: 'end-marker',
+    html: `<div style="font-size: 24px;">🏁</div>`,
+    iconSize: [24, 24],
+    iconAnchor: [12, 24]
+  });
+};
+
 function MapUpdater({ polygon }) {
   const map = useMap();
   React.useEffect(() => {
@@ -54,6 +72,21 @@ function MapFocusHandler({ activeVertex }) {
   return null;
 }
 
+function MapClickHandler({ selectingMode, setStartPoint, setEndPoint, setSelectingMode }) {
+  useMapEvents({
+    click(e) {
+      if (selectingMode === 'start') {
+        setStartPoint([e.latlng.lat, e.latlng.lng]);
+        setSelectingMode(null);
+      } else if (selectingMode === 'end') {
+        setEndPoint([e.latlng.lat, e.latlng.lng]);
+        setSelectingMode(null);
+      }
+    },
+  });
+  return null;
+}
+
 function App() {
   const [polygonCoords, setPolygonCoords] = useState(null);
   const [routeGeoJSON, setRouteGeoJSON] = useState(null);
@@ -69,8 +102,13 @@ function App() {
   const [showArrows, setShowArrows] = useState(false);
   const [singlePassTwoWay, setSinglePassTwoWay] = useState(true);
   const [ignoreUTurns, setIgnoreUTurns] = useState(true);
+  const [avoidPrivate, setAvoidPrivate] = useState(true);
   const [minVertexDistance, setMinVertexDistance] = useState(25);
   const [currentVertexIdx, setCurrentVertexIdx] = useState(0);
+
+  const [startPoint, setStartPoint] = useState(null);
+  const [endPoint, setEndPoint] = useState(null);
+  const [selectingMode, setSelectingMode] = useState(null); // 'start' or 'end' or null
 
   // Calculations
   const totalDistanceMeters = tableData.reduce((acc, row) => acc + parseFloat(row.distancia_m), 0);
@@ -224,7 +262,10 @@ function App() {
       const response = await axios.post(`${API_URL}/calculate`, { 
         coordinates: reqCoords,
         single_pass_twoway: singlePassTwoWay,
-        ignore_u_turns: ignoreUTurns
+        ignore_u_turns: ignoreUTurns,
+        avoid_private: avoidPrivate,
+        start_point: startPoint,
+        end_point: endPoint
       });
       
       setRouteGeoJSON(response.data.geojson);
@@ -359,8 +400,14 @@ function App() {
             </div>
           )}
 
-          <div className="map-container">
+          <div className="map-container" style={{ cursor: selectingMode ? 'crosshair' : 'default' }}>
             <MapContainer center={[-26.3045, -48.846]} zoom={15} maxZoom={22} style={{ height: '100%', width: '100%' }}>
+              <MapClickHandler 
+                selectingMode={selectingMode} 
+                setStartPoint={setStartPoint} 
+                setEndPoint={setEndPoint} 
+                setSelectingMode={setSelectingMode} 
+              />
               
               {/* LayersControl directly below zoom buttons (+/-) */}
               <LayersControl position="topleft">
@@ -414,6 +461,14 @@ function App() {
                   icon={createArrowIcon(a.angle)} 
                 />
               ))}
+
+              {/* Start and End Markers */}
+              {startPoint && (
+                <Marker position={startPoint} icon={createStartIcon()} zIndexOffset={2000} />
+              )}
+              {endPoint && (
+                <Marker position={endPoint} icon={createEndIcon()} zIndexOffset={2000} />
+              )}
             </MapContainer>
           </div>
         </div>
@@ -437,9 +492,27 @@ function App() {
             </div>
             
             {polygonCoords && (
-              <p style={{marginTop: '10px', color: 'var(--primary-color)', fontSize: '0.9rem', fontWeight: '500'}}>
-                ✓ Área carregada com sucesso!
-              </p>
+              <div style={{ marginTop: '15px' }}>
+                <p style={{ color: 'var(--primary-color)', fontSize: '0.9rem', fontWeight: '500', marginBottom: '10px' }}>
+                  ✓ Área carregada com sucesso!
+                </p>
+                <div style={{ display: 'flex', gap: '10px', flexDirection: 'column' }}>
+                  <button 
+                    className="button-primary" 
+                    style={{ background: selectingMode === 'start' ? '#ff9800' : '#f0f0f0', color: selectingMode === 'start' ? '#fff' : '#333', border: '1px solid #ccc' }}
+                    onClick={() => setSelectingMode('start')}
+                  >
+                    📍 {startPoint ? 'Entrada Definida (Clique para alterar)' : 'Definir Ponto de Entrada'}
+                  </button>
+                  <button 
+                    className="button-primary" 
+                    style={{ background: selectingMode === 'end' ? '#ff9800' : '#f0f0f0', color: selectingMode === 'end' ? '#fff' : '#333', border: '1px solid #ccc' }}
+                    onClick={() => setSelectingMode('end')}
+                  >
+                    🏁 {endPoint ? 'Saída Definida (Clique para alterar)' : 'Definir Ponto de Saída'}
+                  </button>
+                </div>
+              </div>
             )}
           </div>
 
@@ -466,6 +539,14 @@ function App() {
                   onChange={(e) => setIgnoreUTurns(e.target.checked)} 
                 />
                 <span>Ignorar Retornos / Travessias de Canteiro Desnecessários</span>
+              </label>
+              <label style={{ fontSize: '0.85rem', fontWeight: '500', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#444' }}>
+                <input 
+                  type="checkbox" 
+                  checked={avoidPrivate} 
+                  onChange={(e) => setAvoidPrivate(e.target.checked)} 
+                />
+                <span>Evitar Locais Privados (Condomínios)</span>
               </label>
             </div>
             

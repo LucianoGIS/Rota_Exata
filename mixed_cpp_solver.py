@@ -119,7 +119,7 @@ def is_u_turn_crossover(G_input, u, v, length_m: float, max_len: float = 50.0) -
     return False
 
 
-def to_working_multidigraph(G_input, weight: str = "length", single_pass_twoway: bool = True, ignore_u_turns: bool = True) -> nx.MultiDiGraph:
+def to_working_multidigraph(G_input, weight: str = "length", single_pass_twoway: bool = True, ignore_u_turns: bool = True, avoid_private: bool = True) -> nx.MultiDiGraph:
     """
     Converte o grafo de entrada em um MultiDiGraph de trabalho,
     identificando arestas opcionais (retornos, alças, acessos) e ajustando
@@ -132,6 +132,13 @@ def to_working_multidigraph(G_input, weight: str = "length", single_pass_twoway:
     seen_twoway_osmids = set()
     
     for u, v, data in G_input.edges(data=True):
+        if avoid_private:
+            access = data.get("access", "")
+            if isinstance(access, list):
+                access = access[0]
+            if access in ["private", "no"]:
+                continue
+                
         name = data.get("name", "Desconhecida")
         if isinstance(name, list):
             name = ", ".join(name)
