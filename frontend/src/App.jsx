@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Polygon, Polyline, Marker, LayersControl, useMap, useMapEvents } from 'react-leaflet';
-import { Upload, Map as MapIcon, Download, Loader2, FileText, File, FileCode, Code, Eye, Layers } from 'lucide-react';
+import { Upload, Map as MapIcon, Download, Loader2, FileText, File, FileCode, Code, Eye, Layers, Moon, Sun } from 'lucide-react';
 import axios from 'axios';
 import './index.css';
 
@@ -109,6 +109,16 @@ function App() {
   const [startPoint, setStartPoint] = useState(null);
   const [endPoint, setEndPoint] = useState(null);
   const [selectingMode, setSelectingMode] = useState(null); // 'start' or 'end' or null
+
+  const [isDarkMode, setIsDarkMode] = useState(false);
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.body.classList.add('dark-mode');
+    } else {
+      document.body.classList.remove('dark-mode');
+    }
+  }, [isDarkMode]);
 
   // Calculations
   const totalDistanceMeters = tableData.reduce((acc, row) => acc + parseFloat(row.distancia_m), 0);
@@ -322,6 +332,15 @@ function App() {
         />
         <div className="header-title">
           <span>Ambiental</span> Rotas
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '15px' }}>
+          <button 
+            onClick={() => setIsDarkMode(!isDarkMode)} 
+            style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            title="Alternar Tema"
+          >
+            {isDarkMode ? <Sun size={24} /> : <Moon size={24} />}
+          </button>
         </div>
       </header>
 

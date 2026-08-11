@@ -37,6 +37,7 @@ Requisitos:
 """
 
 import json
+import math
 import networkx as nx
 from shapely.geometry import Polygon
 
@@ -265,6 +266,70 @@ def balance_graph(G_req: nx.MultiDiGraph, G_all: nx.MultiDiGraph = None, weight:
 # 4. Extração da rota (circuito/caminho Euleriano)
 # ---------------------------------------------------------------------------
 
+def smooth_eulerian_circuit(G_bal, start_node):
+    g = G_bal.copy()
+    if g.number_of_edges() == 0:
+        return []
+        
+    out_edges = {n: list(g.out_edges(n, keys=True, data=True)) for n in g.nodes()}
+    
+    curr = start_node
+    stack = []
+    circuit = []
+    prev_node = None
+    
+    while True:
+        edges = out_edges[curr]
+        if not edges:
+            if not stack:
+                break
+            u, v, k = stack.pop()
+            circuit.append((u, v, k))
+            curr = u
+            prev_node = None  # Reset geometric logic on backtrack
+        else:
+            best_idx = 0
+            if prev_node is not None and len(edges) > 1:
+                min_angle = float('inf')
+                for i, edge in enumerate(edges):
+                    v = edge[1]
+                    if v == prev_node:
+                        # Penalty for U-turn
+                        angle = 1000
+                    else:
+                        try:
+                            ux, uy = G_bal.nodes[prev_node]['x'], G_bal.nodes[prev_node]['y']
+                            vx, vy = G_bal.nodes[curr]['x'], G_bal.nodes[curr]['y']
+                            wx, wy = G_bal.nodes[v]['x'], G_bal.nodes[v]['y']
+                            
+                            dx1, dy1 = vx - ux, vy - uy
+                            dx2, dy2 = wx - vx, wy - vy
+                            norm1 = math.hypot(dx1, dy1)
+                            norm2 = math.hypot(dx2, dy2)
+                            
+                            if norm1 == 0 or norm2 == 0:
+                                angle = 90
+                            else:
+                                dot = (dx1*dx2 + dy1*dy2) / (norm1 * norm2)
+                                dot = max(-1.0, min(1.0, dot))
+                                angle = math.degrees(math.acos(dot))
+                        except KeyError:
+                            angle = 90
+                            
+                    if angle < min_angle:
+                        min_angle = angle
+                        best_idx = i
+                        
+            chosen = edges.pop(best_idx)
+            u, v, k, d = chosen
+            stack.append((u, v, k))
+            prev_node = curr
+            curr = v
+
+    circuit.reverse()
+    return circuit
+
+
 def solve_route(G_raw: nx.MultiDiGraph, start_node, end_node=None, weight: str = "length") -> list:
     """
     Recebe o grafo completo G_raw e calcula a rota Euleriana.
@@ -378,7 +443,7 @@ def solve_route(G_raw: nx.MultiDiGraph, start_node, end_node=None, weight: str =
                     imbalance[d] += 1
                     imbalance[s] -= 1
 
-    circuit = list(nx.eulerian_circuit(G_bal, source=start_node, keys=True))
+    circuit = smooth_eulerian_circuit(G_bal, start_node)
 
     if open_path:
         for i, (u, v, k) in enumerate(circuit):
